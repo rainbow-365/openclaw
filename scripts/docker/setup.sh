@@ -99,6 +99,10 @@ read_env_gateway_token() {
   fi
 }
 
+run_bootstrap_openclaw_cli() {
+  docker compose "${BOOTSTRAP_COMPOSE_ARGS[@]}" run --rm --no-deps openclaw-cli "$@"
+}
+
 ensure_control_ui_allowed_origins() {
   if [[ "${OPENCLAW_GATEWAY_BIND}" == "loopback" ]]; then
     return 0
@@ -108,8 +112,7 @@ ensure_control_ui_allowed_origins() {
   local current_allowed_origins
   allowed_origin_json="$(printf '["http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT")"
   current_allowed_origins="$(
-    docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-      config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+    run_bootstrap_openclaw_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
   )"
   current_allowed_origins="${current_allowed_origins//$'\r'/}"
 
@@ -118,16 +121,14 @@ ensure_control_ui_allowed_origins() {
     return 0
   fi
 
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+  run_bootstrap_openclaw_cli \
     config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json >/dev/null
   echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
 }
 
 sync_gateway_mode_and_bind() {
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.mode local >/dev/null
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
+  run_bootstrap_openclaw_cli config set gateway.mode local >/dev/null
+  run_bootstrap_openclaw_cli config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
   echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
 }
 
@@ -367,6 +368,14 @@ done
 # Keep a base compose arg set without sandbox overlay so rollback paths can
 # force a known-safe gateway service definition (no docker.sock mount).
 BASE_COMPOSE_ARGS=("${COMPOSE_ARGS[@]}")
+BOOTSTRAP_COMPOSE_FILE="$ROOT_DIR/docker-compose.bootstrap.yml"
+cat >"$BOOTSTRAP_COMPOSE_FILE" <<'YAML'
+services:
+  openclaw-cli:
+    network_mode: bridge
+YAML
+trap 'rm -f "$BOOTSTRAP_COMPOSE_FILE"' EXIT
+BOOTSTRAP_COMPOSE_ARGS=("${COMPOSE_ARGS[@]}" "-f" "$BOOTSTRAP_COMPOSE_FILE")
 COMPOSE_HINT="docker compose"
 for compose_file in "${COMPOSE_FILES[@]}"; do
   COMPOSE_HINT+=" -f ${compose_file}"
@@ -471,7 +480,7 @@ echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
 echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
 echo "Install Gateway daemon: No (managed by Docker Compose)"
 echo ""
-docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --mode local --no-install-daemon
+run_bootstrap_openclaw_cli onboard --mode local --no-install-daemon
 
 echo ""
 echo "==> Docker gateway defaults"
